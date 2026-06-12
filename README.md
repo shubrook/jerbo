@@ -86,3 +86,23 @@ python pi/tracker.py          # or tracker_2mic.py
   fundamental.
 - **Sluggish or twitchy?** Adjust `SMOOTHING` (higher = steadier) and
   `MAX_STEP_DEG` (servo speed per ~85 ms block).
+
+## 3D-printed mount
+
+`hardware/fusion_mic_mount.py` is an Autodesk Fusion script (Utilities ->
+Add-Ins -> Scripts and Add-Ins) that generates a parametric open-frame
+cross: thin arms with a mic pad at each tip and a hub that bolts to the
+pan/tilt bracket. Set `CROSS = False` for a 2-mic bar matching
+`tracker_2mic.py`. Edit the constants at the top and re-run to resize.
+
+Build notes:
+- Open frame beats an enclosure: surfaces near the mics reflect sound and
+  smear the correlation peaks. Keep the arms thin and the array symmetric.
+- The INMP441 inlet is the small hole in the PCB (bottom port). Center it
+  over the pad's through-hole, facing the sound, zip-tied through the slots.
+- Isolate the hub from the servo bracket with rubber grommets or a TPU
+  pad; frame-conducted servo whine correlates at zero delay and pulls the
+  estimate toward center.
+- Outdoors, put foam windscreens over the mics.
+- After printing, measure the real port-to-port distances with calipers
+  and update `MIC_POSITIONS`.
