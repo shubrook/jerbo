@@ -63,6 +63,21 @@ CONFIDENCE_GATE = 10.0     # median pair confidence; uncorrelated noise sits
                            # below ~6, real sources in the tens
 BAND_HZ = (100.0, 8000.0)  # prop fundamentals + harmonics
 
+# --- track gating: rejects other sound sources once locked on ---
+TRACK_GATE_S = 60e-6       # accept per-pair delays within this of the track's
+                           # prediction (60 us ~ a 14 deg cone at 15 cm arms)
+TRACK_HOLD_GATE = 5.0      # confidence for "weak evidence": keep the lock and
+                           # hold position, but don't re-center the gate (a
+                           # loud interferer's sidelobes can score this high)
+TRACK_MISS_LIMIT = 120     # blocks (~10 s) without a strong hit before the
+                           # track is dropped and the search goes wide again
+TRACK_SMOOTHING = 0.25     # the gate center must follow raw estimates much
+                           # faster than the servo, or it lags the target out
+                           # of its own gate
+WEAK_SMOOTHING = 0.85      # gate drift rate on weak evidence; needed to follow
+                           # a moving target through a louder interferer, but
+                           # past ~+12 dB it can slide onto the louder source
+
 # --- servos ---
 PAN_PIN, TILT_PIN = 12, 13
 PAN_RANGE = (-90, 90)
@@ -94,6 +109,12 @@ def clamp(value, lo, hi):
     return max(lo, min(hi, value))
 
 
+def unit_vector(pan_deg, tilt_deg):
+    p, t = math.radians(pan_deg), math.radians(tilt_deg)
+    return np.array([math.sin(p) * math.cos(t), math.sin(t),
+                     math.cos(p) * math.cos(t)])
+
+
 servo_pan = AngularServo(PAN_PIN, min_angle=PAN_RANGE[0], max_angle=PAN_RANGE[1],
                          min_pulse_width=0.0005, max_pulse_width=0.0025)
 servo_tilt = AngularServo(TILT_PIN, min_angle=TILT_RANGE[0], max_angle=TILT_RANGE[1],
@@ -104,6 +125,9 @@ sock = connect_pc()
 
 pan_est = tilt_est = 0.0
 pan_servo = tilt_servo = 0.0
+track_pan = track_tilt = 0.0  # gate center, array frame (no sign flips)
+track_u = None  # array-frame unit vector of the current lock, None = searching
+misses = 0
 
 print("Tracking. Columns: pan / tilt / rms / confidence")
 try:
@@ -125,20 +149,47 @@ try:
                 continue
 
             rms = float(np.sqrt((channels ** 2).mean()))
-            pan_raw, tilt_raw, confidence = finder.estimate(channels)
+            pan_raw, tilt_raw, confidence = finder.estimate(
+                channels, expected_u=track_u, gate_s=TRACK_GATE_S)
 
-            heard = rms > RMS_GATE and confidence > CONFIDENCE_GATE
-            if heard:
-                pan_est = SMOOTHING * pan_est + (1 - SMOOTHING) * PAN_SIGN * pan_raw
-                tilt_est = SMOOTHING * tilt_est + (1 - SMOOTHING) * TILT_SIGN * tilt_raw
+            strong = rms > RMS_GATE and confidence > CONFIDENCE_GATE
+            holding = (not strong and track_u is not None
+                       and rms > RMS_GATE and confidence > TRACK_HOLD_GATE)
+            if strong:
+                if track_u is None:  # acquisition: snap to the detection
+                    track_pan, track_tilt = pan_raw, tilt_raw
+                    pan_est = PAN_SIGN * pan_raw
+                    tilt_est = TILT_SIGN * tilt_raw
+                else:
+                    track_pan = (TRACK_SMOOTHING * track_pan
+                                 + (1 - TRACK_SMOOTHING) * pan_raw)
+                    track_tilt = (TRACK_SMOOTHING * track_tilt
+                                  + (1 - TRACK_SMOOTHING) * tilt_raw)
+                    pan_est = SMOOTHING * pan_est + (1 - SMOOTHING) * PAN_SIGN * pan_raw
+                    tilt_est = SMOOTHING * tilt_est + (1 - SMOOTHING) * TILT_SIGN * tilt_raw
+                track_u = unit_vector(track_pan, track_tilt)
+                misses = 0
 
                 # slew-limit so one bad estimate can't slam the servos
                 pan_servo += clamp(pan_est - pan_servo, -MAX_STEP_DEG, MAX_STEP_DEG)
                 tilt_servo += clamp(tilt_est - tilt_servo, -MAX_STEP_DEG, MAX_STEP_DEG)
                 servo_pan.angle = clamp(pan_servo, *PAN_RANGE)
                 servo_tilt.angle = clamp(tilt_servo, *TILT_RANGE)
+            elif track_u is not None:
+                if holding:  # let the gate creep after a moving target
+                    track_pan = (WEAK_SMOOTHING * track_pan
+                                 + (1 - WEAK_SMOOTHING) * pan_raw)
+                    track_tilt = (WEAK_SMOOTHING * track_tilt
+                                  + (1 - WEAK_SMOOTHING) * tilt_raw)
+                    track_u = unit_vector(track_pan, track_tilt)
+                # servo holds position on anything short of a strong hit
+                misses += 1
+                if misses > TRACK_MISS_LIMIT:
+                    track_u = None
+                    print("track lost, searching wide")
 
-            print(f"{'TRACK' if heard else 'idle '} "
+            status = 'TRACK' if strong else ('hold ' if holding else 'idle ')
+            print(f"{status} "
                   f"pan={pan_est:6.1f}  tilt={tilt_est:6.1f}  "
                   f"rms={rms:.5f}  conf={confidence:5.1f}")
 

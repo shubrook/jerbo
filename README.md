@@ -106,3 +106,30 @@ Build notes:
 - Outdoors, put foam windscreens over the mics.
 - After printing, measure the real port-to-port distances with calipers
   and update `MIC_POSITIONS`.
+
+## Rejecting another propeller
+
+Other sound sources (a second drone, a mower) are handled spatially, not
+with audio filtering: once a track is established, each mic pair's
+correlation peak is only accepted within a narrow window (`TRACK_GATE_S`)
+around the delay the track predicts. A source at a different bearing
+physically cannot produce a peak inside that window. Strong detections
+(confidence above `CONFIDENCE_GATE`) move the track; weaker evidence
+(above `TRACK_HOLD_GATE`) lets the gate follow a moving target without
+trusting it enough to slew the servos; ~10 s without a strong detection
+(`TRACK_MISS_LIMIT`) drops back to a wide search.
+
+Measured envelope (synthetic two-drone scenes, 15 cm cross): the lock
+holds within a few degrees through an interferer up to ~10 dB louder at
+moderate target motion, degrades beyond ~12 dB, and at +20 dB (a drone
+several times closer) the target is statistically invisible in an 85 ms
+block — the tracker will hold the last bearing for a while, then
+reacquire the louder source. If you need more margin, raise `BLOCK_SIZE`
+(longer integration buys interferer rejection at the cost of latency).
+
+Two caveats: acquisition locks the loudest source — if the wrong drone is
+louder when tracking starts, the gate will faithfully protect the wrong
+target. And two sources at nearly the same bearing can't be separated by
+delay at all. Harmonic filtering (correlating only on the target's
+blade-pass comb) was tested and only helps when the props are at similar
+loudness, so it isn't included.
