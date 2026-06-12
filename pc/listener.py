@@ -3,7 +3,7 @@ Telemetry logger — receives angle estimates from the Pi and logs them to
 SQL Server. This is logging only; the control loop runs entirely on the Pi.
 
 Each record from the Pi is 5 float64s:
-    timestamp (unix), angle_deg, tdoa_us, rms, confidence
+    timestamp (unix), pan_deg, tilt_deg, rms, confidence
 """
 import socket
 import urllib.parse
@@ -16,7 +16,7 @@ HOST = ''
 PORT = 12345
 BATCH_ROWS = 50  # insert to SQL every N records (~4 s at 12 blocks/s)
 
-RECORD_FIELDS = ['ts_unix', 'angle_deg', 'tdoa_us', 'rms', 'confidence']
+RECORD_FIELDS = ['ts_unix', 'pan_deg', 'tilt_deg', 'rms', 'confidence']
 RECORD_BYTES = len(RECORD_FIELDS) * 8
 
 conn_str = (
@@ -44,8 +44,9 @@ def recv_record(conn):
 def flush(rows):
     df = pd.DataFrame(rows, columns=RECORD_FIELDS)
     df.insert(0, 'ts', pd.to_datetime(df['ts_unix'], unit='s'))
-    df.to_sql('pan_telemetry', con=engine, if_exists='append', index=False)
-    print(f"logged {len(df)} rows, last angle {df['angle_deg'].iloc[-1]:.1f}")
+    df.to_sql('doa_telemetry', con=engine, if_exists='append', index=False)
+    print(f"logged {len(df)} rows, last pan {df['pan_deg'].iloc[-1]:.1f} "
+          f"tilt {df['tilt_deg'].iloc[-1]:.1f}")
 
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
